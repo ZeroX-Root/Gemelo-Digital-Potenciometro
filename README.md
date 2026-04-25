@@ -79,3 +79,8 @@ La interfaz móvil cuenta con un diseño inmersivo e indicadores visuales codifi
 ## Contexto Académico
 
 Este proyecto fue desarrollado como parte de las prácticas y evaluaciones de la asignatura **Comunicación Electrónica**. Tiene como objetivo demostrar la viabilidad y los principios de la comunicación serial inalámbrica, el procesamiento de señales analógicas y el concepto de *Digital Twin* aplicado a sistemas de lazo abierto/cerrado.
+
+
+## Autor
+
+- **Alejandro Guarin Melo** - [Visita mi Portafolio](https://guarin-dev.vercel.app/)
