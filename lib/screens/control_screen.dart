@@ -6,6 +6,13 @@ import 'package:flutter_bluetooth_serial/flutter_bluetooth_serial.dart';
 import 'package:app_parcial/services/bluetooth_service.dart';
 import 'package:app_parcial/widget/conexion_bluetooth.dart';
 
+// Paleta de colores consistente
+const _bgDark = Color(0xFF0D1117);
+const _bgCard = Color(0xFF161B22);
+const _accent = Color(0xFF00E5FF);
+const _textMain = Color(0xFFE6EDF3);
+const _textDim = Color(0xFF8B949E);
+
 class ControlScreen extends StatefulWidget {
   const ControlScreen({Key? key}) : super(key: key);
 
@@ -24,11 +31,9 @@ class _ControlScreenState extends State<ControlScreen> {
   double _appSliderValue = 0;
   String _buffer = "";
 
-  // 🔍 Logs en pantalla
-  List<String> _logs = [];
-
   StreamSubscription? _dataSubscription;
   StreamSubscription? _statusSubscription;
+  Timer? _bluetoothTimer; // Timer para el Debounce del Slider
 
   BluetoothDevice? get device => bluetoothService.connectedDevice;
 
@@ -40,26 +45,12 @@ class _ControlScreenState extends State<ControlScreen> {
 
   void _initListeners() {
     isConnected = bluetoothService.isConnected;
-    _currentMode = 0;
-
-    _dataSubscription = bluetoothService.dataStream.listen((data) {
-      _onDataReceived(data);
-    });
-
+    _dataSubscription = bluetoothService.dataStream.listen(_onDataReceived);
     _statusSubscription = bluetoothService.statusStream.listen((status) {
       if (!mounted) return;
-
-      setState(() {
-        isConnected = status == BluetoothService.connected;
-      });
-
+      setState(() => isConnected = status == BluetoothService.connected);
       if (status == BluetoothService.disconnected && !_isNavigating) {
         _isNavigating = true;
-
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text("Dispositivo desconectado")),
-        );
-
         Navigator.pushReplacement(
           context,
           MaterialPageRoute(builder: (_) => const ConexionBluetooth()),
@@ -68,62 +59,37 @@ class _ControlScreenState extends State<ControlScreen> {
     });
 
     if (isConnected) {
-      Future.delayed(const Duration(milliseconds: 500), () {
-        _sendMessage("M1");
-      });
+      Future.delayed(
+        const Duration(milliseconds: 500),
+        () => _sendMessage("M1"),
+      );
     }
-  }
-
-  void _addLog(String msg) {
-    if (!mounted) return;
-    setState(() {
-      _logs.add(msg);
-      if (_logs.length > 10) _logs.removeAt(0);
-    });
   }
 
   void _onDataReceived(Uint8List data) {
     final dataString = ascii.decode(data, allowInvalid: true);
-    _addLog("RAW: '$dataString'");
-
     _buffer += dataString;
-
     while (_buffer.contains('\n')) {
       final parts = _buffer.split('\n');
       final cmd = parts.first.trim();
       _buffer = parts.sublist(1).join('\n');
-
-      _addLog("CMD: '$cmd' | modo: $_currentMode");
-
       if (cmd.startsWith("P") && _currentMode == 0) {
         try {
           final val = int.parse(cmd.substring(1));
-          _addLog("POT: $val");
-          if (mounted) {
-            setState(() {
-              _potentiometerValue = val.clamp(0, 255);
-            });
-          }
-        } catch (e) {
-          _addLog("ERROR: $e");
-        }
+          if (mounted) setState(() => _potentiometerValue = val.clamp(0, 255));
+        } catch (_) {}
       }
     }
   }
 
   Future<void> _sendMessage(String text) async {
     if (!isConnected) return;
-    _addLog("SEND: '$text'");
     await bluetoothService.sendMessage(text);
   }
 
   void _changeMode(int index) {
     if (!isConnected) return;
-
-    setState(() {
-      _currentMode = index;
-    });
-
+    setState(() => _currentMode = index);
     if (index == 0) {
       _sendMessage("M1");
     } else {
@@ -133,21 +99,19 @@ class _ControlScreenState extends State<ControlScreen> {
   }
 
   Color _getIntensityColor(int value) {
-    if (value < 85) return Colors.green;
-    if (value < 170) return Colors.yellow;
-    return Colors.red;
+    if (value < 60) return const Color(0xFF00E676);
+    if (value < 140) return const Color(0xFFFFD600);
+    return const Color(0xFFFF1744);
   }
 
   Future<void> _disconnectAndReturn() async {
     if (_isNavigating) return;
     _isNavigating = true;
-
+    _bluetoothTimer?.cancel();
     await _dataSubscription?.cancel();
     await _statusSubscription?.cancel();
     await bluetoothService.disconnect();
-
     if (!mounted) return;
-
     Navigator.pushReplacement(
       context,
       MaterialPageRoute(builder: (_) => const ConexionBluetooth()),
@@ -156,221 +120,275 @@ class _ControlScreenState extends State<ControlScreen> {
 
   @override
   void dispose() {
+    _bluetoothTimer?.cancel();
     _dataSubscription?.cancel();
     _statusSubscription?.cancel();
     super.dispose();
   }
 
-  Widget _buildLogPanel() {
-    return Container(
-      height: 150,
-      color: Colors.black,
-      padding: const EdgeInsets.all(8),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              const Text(
-                "🔍 Logs BT",
-                style: TextStyle(
-                  color: Colors.greenAccent,
-                  fontSize: 11,
-                  fontWeight: FontWeight.bold,
-                ),
-              ),
-              GestureDetector(
-                onTap: () => setState(() => _logs.clear()),
-                child: const Text(
-                  "limpiar",
-                  style: TextStyle(color: Colors.grey, fontSize: 10),
-                ),
+  // --- COMPONENTES ---
+
+  Widget _buildGauge(double value, Color color) {
+    // AJUSTE DE ESCALA: Cambia 180 por el valor máximo real de tu sensor para llegar al 100%
+    const double maxRealValue = 180.0;
+    double displayValue = (value / maxRealValue).clamp(0.0, 1.0);
+    double percentage = displayValue * 100;
+
+    return Stack(
+      alignment: Alignment.center,
+      children: [
+        Container(
+          width: 200,
+          height: 200,
+          decoration: BoxDecoration(
+            shape: BoxShape.circle,
+            boxShadow: [
+              BoxShadow(
+                color: color.withOpacity(0.1),
+                blurRadius: 40,
+                spreadRadius: 5,
               ),
             ],
           ),
-          const SizedBox(height: 4),
-          Expanded(
-            child: ListView(
-              children: _logs
-                  .map(
-                    (l) => Text(
-                      l,
-                      style: TextStyle(
-                        color: l.startsWith("ERROR")
-                            ? Colors.red
-                            : l.startsWith("SEND")
-                            ? Colors.yellow
-                            : Colors.green,
-                        fontSize: 10,
-                      ),
-                    ),
-                  )
-                  .toList(),
+        ),
+        SizedBox(
+          width: 210,
+          height: 210,
+          child: CircularProgressIndicator(
+            value: displayValue,
+            strokeWidth: 12,
+            strokeCap: StrokeCap.round,
+            backgroundColor: _bgCard,
+            valueColor: AlwaysStoppedAnimation<Color>(color),
+          ),
+        ),
+        Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(
+              "${percentage.toStringAsFixed(1)}%",
+              style: const TextStyle(
+                fontSize: 48,
+                fontWeight: FontWeight.w900,
+                color: _textMain,
+                letterSpacing: -2,
+              ),
             ),
+            Text(
+              "POTENCIA",
+              style: TextStyle(
+                color: color.withOpacity(0.8),
+                fontSize: 12,
+                fontWeight: FontWeight.bold,
+                letterSpacing: 2,
+              ),
+            ),
+          ],
+        ),
+      ],
+    );
+  }
+
+  Widget _buildDataCard({
+    required String label,
+    required String value,
+    required IconData icon,
+    required Color color,
+  }) {
+    return Container(
+      margin: const EdgeInsets.only(bottom: 12),
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: _bgCard,
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: color.withOpacity(0.15), width: 1),
+      ),
+      child: Row(
+        children: [
+          Icon(icon, color: color, size: 24),
+          const SizedBox(width: 16),
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                label,
+                style: const TextStyle(color: _textDim, fontSize: 13),
+              ),
+              Text(
+                value,
+                style: TextStyle(
+                  color: color,
+                  fontSize: 20,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+            ],
           ),
         ],
       ),
     );
   }
 
-  Widget _buildPhysicalMode() {
-    final percentage = (_potentiometerValue / 255) * 100;
-    final intensityColor = _getIntensityColor(_potentiometerValue);
+  // --- VISTAS ---
 
-    return Column(
-      mainAxisAlignment: MainAxisAlignment.center,
+  Widget _buildPhysicalMode() {
+    final intensityColor = _getIntensityColor(_potentiometerValue);
+    final voltaje = _potentiometerValue * (5.0 / 255.0);
+
+    return ListView(
+      padding: const EdgeInsets.symmetric(horizontal: 24),
       children: [
-        const Text(
-          "Modo Potenciómetro (Físico)",
-          style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold),
-        ),
-        const SizedBox(height: 20),
-        Text(
-          "El Arduino está leyendo el potenciómetro y controlando el motor.",
-          textAlign: TextAlign.center,
-          style: TextStyle(color: Colors.grey[400]),
-        ),
         const SizedBox(height: 40),
-        Stack(
-          alignment: Alignment.center,
-          children: [
-            SizedBox(
-              width: 200,
-              height: 200,
-              child: CircularProgressIndicator(
-                value: _potentiometerValue / 255,
-                strokeWidth: 20,
-                backgroundColor: Colors.grey[800],
-                valueColor: AlwaysStoppedAnimation<Color>(intensityColor),
-              ),
-            ),
-            Column(
-              children: [
-                Text(
-                  "${percentage.toStringAsFixed(1)}%",
-                  style: TextStyle(
-                    fontSize: 32,
-                    fontWeight: FontWeight.bold,
-                    color: intensityColor,
-                  ),
-                ),
-                const Text("Intensidad"),
-              ],
-            ),
-          ],
-        ),
+        _buildGauge(_potentiometerValue.toDouble(), intensityColor),
         const SizedBox(height: 40),
-        Icon(Icons.speed, size: 80, color: intensityColor),
+        _buildDataCard(
+          label: "VALOR PWM (RAW)",
+          value: "$_potentiometerValue",
+          icon: Icons.memory,
+          color: _accent,
+        ),
+        _buildDataCard(
+          label: "VOLTAJE",
+          value: "${voltaje.toStringAsFixed(2)} V",
+          icon: Icons.bolt,
+          color: Colors.amber,
+        ),
       ],
     );
   }
 
   Widget _buildAppMode() {
-    final percentage = (_appSliderValue / 255) * 100;
     final intensityColor = _getIntensityColor(_appSliderValue.toInt());
+    final voltaje = _appSliderValue * (5.0 / 255.0);
 
-    return Column(
-      mainAxisAlignment: MainAxisAlignment.center,
+    return ListView(
+      padding: const EdgeInsets.symmetric(horizontal: 24),
       children: [
-        const Text(
-          "Modo Aplicación (Virtual)",
-          style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold),
-        ),
-        const SizedBox(height: 20),
-        Text(
-          "Controla la intensidad del motor desde aquí.",
-          textAlign: TextAlign.center,
-          style: TextStyle(color: Colors.grey[400]),
-        ),
         const SizedBox(height: 40),
-        Text(
-          "${percentage.toStringAsFixed(1)}%",
-          style: TextStyle(
-            fontSize: 48,
-            fontWeight: FontWeight.bold,
-            color: intensityColor,
+        _buildGauge(_appSliderValue, intensityColor),
+        const SizedBox(height: 32),
+        Container(
+          padding: const EdgeInsets.all(20),
+          decoration: BoxDecoration(
+            color: _bgCard,
+            borderRadius: BorderRadius.circular(24),
+            border: Border.all(color: _accent.withOpacity(0.1)),
+          ),
+          child: Column(
+            children: [
+              const Text(
+                "CONTROL DESLIZANTE",
+                style: TextStyle(
+                  color: _textDim,
+                  fontWeight: FontWeight.bold,
+                  fontSize: 12,
+                ),
+              ),
+              const SizedBox(height: 10),
+              SliderTheme(
+                data: SliderTheme.of(context).copyWith(
+                  activeTrackColor: _accent,
+                  inactiveTrackColor: _bgDark,
+                  thumbColor: Colors.white,
+                  trackHeight: 8,
+                ),
+                child: Slider(
+                  value: _appSliderValue,
+                  min: 0,
+                  max: 255,
+                  onChanged: (v) {
+                    setState(() => _appSliderValue = v);
+                    // TIMER (Debounce) para evitar saturación y lag
+                    if (_bluetoothTimer?.isActive ?? false)
+                      _bluetoothTimer!.cancel();
+                    _bluetoothTimer = Timer(
+                      const Duration(milliseconds: 80),
+                      () {
+                        _sendMessage("V${v.toInt()}");
+                      },
+                    );
+                  },
+                ),
+              ),
+            ],
           ),
         ),
-        const SizedBox(height: 20),
-        SliderTheme(
-          data: SliderTheme.of(context).copyWith(
-            activeTrackColor: intensityColor,
-            thumbColor: intensityColor,
-            overlayColor: intensityColor.withAlpha(50),
-          ),
-          child: Slider(
-            value: _appSliderValue,
-            min: 0,
-            max: 255,
-            onChanged: (value) {
-              setState(() {
-                _appSliderValue = value;
-              });
-            },
-            onChangeEnd: (value) {
-              if (_currentMode == 1) {
-                _sendMessage("V${value.toInt()}");
-              }
-            },
-          ),
+        const SizedBox(height: 16),
+        _buildDataCard(
+          label: "SALIDA CALCULADA",
+          value: "${voltaje.toStringAsFixed(2)} V",
+          icon: Icons.bolt,
+          color: Colors.amber,
         ),
-        const SizedBox(height: 40),
-        Icon(Icons.touch_app, size: 80, color: intensityColor),
       ],
     );
   }
 
   @override
   Widget build(BuildContext context) {
-    final deviceName = device?.name ?? "Dispositivo";
-
     return Scaffold(
+      backgroundColor: _bgDark,
       appBar: AppBar(
-        title: Text(deviceName),
-        backgroundColor: Theme.of(context).colorScheme.primary,
-        foregroundColor: Colors.white,
+        backgroundColor: _bgDark,
+        elevation: 0,
+        title: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              device?.name ?? "HC-05",
+              style: const TextStyle(
+                fontSize: 18,
+                fontWeight: FontWeight.bold,
+                color: _textMain,
+              ),
+            ),
+            Text(
+              isConnected ? "SISTEMA EN LÍNEA" : "RECONECTANDO...",
+              style: TextStyle(
+                fontSize: 10,
+                color: isConnected ? Colors.green : Colors.red,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+          ],
+        ),
         actions: [
           IconButton(
+            icon: const Icon(Icons.power_settings_new, color: Colors.redAccent),
             onPressed: _disconnectAndReturn,
-            icon: const Icon(Icons.logout),
-            tooltip: "Desconectar",
           ),
-          Icon(
-            isConnected ? Icons.bluetooth_connected : Icons.bluetooth_disabled,
-            color: isConnected ? Colors.green : Colors.red,
-          ),
-          const SizedBox(width: 16),
         ],
       ),
       body: !isConnected
-          ? const Center(child: Text("Dispositivo desconectado"))
-          : Column(
-              children: [
-                Expanded(
-                  child: Padding(
-                    padding: const EdgeInsets.all(16.0),
-                    child: _currentMode == 0
-                        ? _buildPhysicalMode()
-                        : _buildAppMode(),
-                  ),
-                ),
-                _buildLogPanel(),
-              ],
-            ),
-      bottomNavigationBar: BottomNavigationBar(
-        currentIndex: _currentMode,
-        onTap: _changeMode,
-        items: const [
-          BottomNavigationBarItem(
-            icon: Icon(Icons.tune),
-            label: 'Potenciómetro (Físico)',
+          ? const Center(child: CircularProgressIndicator(color: _accent))
+          : (_currentMode == 0 ? _buildPhysicalMode() : _buildAppMode()),
+      bottomNavigationBar: Container(
+        height: 85,
+        decoration: const BoxDecoration(
+          color: _bgCard,
+          borderRadius: BorderRadius.vertical(top: Radius.circular(30)),
+        ),
+        child: ClipRRect(
+          borderRadius: const BorderRadius.vertical(top: Radius.circular(30)),
+          child: BottomNavigationBar(
+            currentIndex: _currentMode,
+            onTap: _changeMode,
+            backgroundColor: Colors.transparent,
+            elevation: 0,
+            selectedItemColor: _accent,
+            unselectedItemColor: _textDim.withOpacity(0.5),
+            items: const [
+              BottomNavigationBarItem(
+                icon: Icon(Icons.analytics_outlined),
+                label: 'MONITOR',
+              ),
+              BottomNavigationBarItem(
+                icon: Icon(Icons.settings_remote),
+                label: 'CONTROL',
+              ),
+            ],
           ),
-          BottomNavigationBarItem(
-            icon: Icon(Icons.smartphone),
-            label: 'App (Virtual)',
-          ),
-        ],
+        ),
       ),
     );
   }
