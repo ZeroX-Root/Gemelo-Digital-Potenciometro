@@ -6,7 +6,6 @@ import 'package:flutter_bluetooth_serial/flutter_bluetooth_serial.dart';
 import 'package:app_parcial/services/bluetooth_service.dart';
 import 'package:app_parcial/widget/conexion_bluetooth.dart';
 
-// Paleta de colores consistente
 const _bgDark = Color(0xFF0D1117);
 const _bgCard = Color(0xFF161B22);
 const _accent = Color(0xFF00E5FF);
@@ -31,11 +30,38 @@ class _ControlScreenState extends State<ControlScreen> {
   double _appSliderValue = 0;
   String _buffer = "";
 
+  // ── Logs ──────────────────────────────────────────
+  final List<String> _logs = [];
+  final ScrollController _logScroll = ScrollController();
+  bool _showLogs = false;
+
   StreamSubscription? _dataSubscription;
   StreamSubscription? _statusSubscription;
-  Timer? _bluetoothTimer; // Timer para el Debounce del Slider
+  Timer? _bluetoothTimer;
 
   BluetoothDevice? get device => bluetoothService.connectedDevice;
+
+  void _log(String msg) {
+    final time = DateTime.now();
+    final label =
+        "[${time.hour.toString().padLeft(2, '0')}:${time.minute.toString().padLeft(2, '0')}:${time.second.toString().padLeft(2, '0')}]";
+    final line = "$label $msg";
+    if (!mounted) return;
+    setState(() {
+      _logs.add(line);
+      if (_logs.length > 100) _logs.removeAt(0); // máximo 100 líneas
+    });
+    // Auto-scroll al final
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (_logScroll.hasClients) {
+        _logScroll.animateTo(
+          _logScroll.position.maxScrollExtent,
+          duration: const Duration(milliseconds: 200),
+          curve: Curves.easeOut,
+        );
+      }
+    });
+  }
 
   @override
   void initState() {
@@ -45,10 +71,18 @@ class _ControlScreenState extends State<ControlScreen> {
 
   void _initListeners() {
     isConnected = bluetoothService.isConnected;
+    _log(
+      isConnected
+          ? "✅ BT conectado al iniciar"
+          : "❌ BT no conectado al iniciar",
+    );
+
     _dataSubscription = bluetoothService.dataStream.listen(_onDataReceived);
     _statusSubscription = bluetoothService.statusStream.listen((status) {
       if (!mounted) return;
-      setState(() => isConnected = status == BluetoothService.connected);
+      final connected = status == BluetoothService.connected;
+      _log(connected ? "✅ Estado: conectado" : "❌ Estado: desconectado");
+      setState(() => isConnected = connected);
       if (status == BluetoothService.disconnected && !_isNavigating) {
         _isNavigating = true;
         Navigator.pushReplacement(
@@ -59,37 +93,53 @@ class _ControlScreenState extends State<ControlScreen> {
     });
 
     if (isConnected) {
-      Future.delayed(
-        const Duration(milliseconds: 500),
-        () => _sendMessage("M1"),
-      );
+      Future.delayed(const Duration(milliseconds: 500), () {
+        _log("📤 Enviando: M1");
+        _sendMessage("M1");
+      });
     }
   }
 
   void _onDataReceived(Uint8List data) {
-    final dataString = ascii.decode(data, allowInvalid: true);
-    _buffer += dataString;
+    _buffer += ascii.decode(data, allowInvalid: true);
+
     while (_buffer.contains('\n')) {
-      final parts = _buffer.split('\n');
-      final cmd = parts.first.trim();
-      _buffer = parts.sublist(1).join('\n');
-      if (cmd.startsWith("P") && _currentMode == 0) {
-        try {
-          final val = int.parse(cmd.substring(1));
+      final idx = _buffer.indexOf('\n');
+      final line = _buffer.substring(0, idx).trim();
+      _buffer = _buffer.substring(idx + 1);
+
+      if (line.isEmpty) continue;
+
+      _log("📥 Recibido: '$line'");
+
+      if (line.startsWith('P') && _currentMode == 0) {
+        final val = int.tryParse(line.substring(1));
+        if (val != null) {
+          _log("🎛️ Potenciómetro: $val");
           if (mounted) setState(() => _potentiometerValue = val.clamp(0, 255));
-        } catch (_) {}
+        } else {
+          _log("⚠️ No se pudo parsear valor P: '${line.substring(1)}'");
+        }
       }
     }
   }
 
   Future<void> _sendMessage(String text) async {
-    if (!isConnected) return;
+    if (!isConnected) {
+      _log("⚠️ Intento de envío sin conexión: $text");
+      return;
+    }
+    _log("📤 Enviando: $text");
     await bluetoothService.sendMessage(text);
   }
 
   void _changeMode(int index) {
     if (!isConnected) return;
-    setState(() => _currentMode = index);
+    setState(() {
+      _currentMode = index;
+      _buffer = "";
+    });
+    _log("🔄 Modo cambiado a: ${index == 0 ? 'FÍSICO' : 'APP'}");
     if (index == 0) {
       _sendMessage("M1");
     } else {
@@ -123,14 +173,97 @@ class _ControlScreenState extends State<ControlScreen> {
     _bluetoothTimer?.cancel();
     _dataSubscription?.cancel();
     _statusSubscription?.cancel();
+    _logScroll.dispose();
     super.dispose();
   }
 
-  // --- COMPONENTES ---
+  // ── Panel de logs ──────────────────────────────────
+  Widget _buildLogPanel() {
+    return Container(
+      height: 220,
+      margin: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: const Color(0xFF0D1117),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: _accent.withOpacity(0.3)),
+      ),
+      child: Column(
+        children: [
+          // Header
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+            decoration: BoxDecoration(
+              color: _accent.withOpacity(0.1),
+              borderRadius: const BorderRadius.vertical(
+                top: Radius.circular(12),
+              ),
+            ),
+            child: Row(
+              children: [
+                const Icon(Icons.terminal, color: _accent, size: 14),
+                const SizedBox(width: 8),
+                const Text(
+                  "LOGS EN TIEMPO REAL",
+                  style: TextStyle(
+                    color: _accent,
+                    fontSize: 11,
+                    fontWeight: FontWeight.bold,
+                    letterSpacing: 1,
+                  ),
+                ),
+                const Spacer(),
+                // Botón limpiar
+                GestureDetector(
+                  onTap: () => setState(() => _logs.clear()),
+                  child: const Text(
+                    "LIMPIAR",
+                    style: TextStyle(color: _textDim, fontSize: 10),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          // Lista de logs
+          Expanded(
+            child: _logs.isEmpty
+                ? const Center(
+                    child: Text(
+                      "Sin logs aún...",
+                      style: TextStyle(color: _textDim, fontSize: 12),
+                    ),
+                  )
+                : ListView.builder(
+                    controller: _logScroll,
+                    padding: const EdgeInsets.all(8),
+                    itemCount: _logs.length,
+                    itemBuilder: (_, i) {
+                      final log = _logs[i];
+                      Color color = _textDim;
+                      if (log.contains('✅')) color = Colors.green;
+                      if (log.contains('❌')) color = Colors.redAccent;
+                      if (log.contains('⚠️')) color = Colors.amber;
+                      if (log.contains('📥')) color = const Color(0xFF00E5FF);
+                      if (log.contains('📤')) color = Colors.purpleAccent;
+                      if (log.contains('🎛️')) color = Colors.greenAccent;
+                      return Text(
+                        log,
+                        style: TextStyle(
+                          color: color,
+                          fontSize: 10,
+                          fontFamily: 'monospace',
+                        ),
+                      );
+                    },
+                  ),
+          ),
+        ],
+      ),
+    );
+  }
 
+  // ── Gauge ──────────────────────────────────────────
   Widget _buildGauge(double value, Color color) {
-    // AJUSTE DE ESCALA: Cambia 180 por el valor máximo real de tu sensor para llegar al 100%
-    const double maxRealValue = 180.0;
+    const double maxRealValue = 255.0; // ✅ corregido
     double displayValue = (value / maxRealValue).clamp(0.0, 1.0);
     double percentage = displayValue * 100;
 
@@ -229,8 +362,7 @@ class _ControlScreenState extends State<ControlScreen> {
     );
   }
 
-  // --- VISTAS ---
-
+  // ── Modos ──────────────────────────────────────────
   Widget _buildPhysicalMode() {
     final intensityColor = _getIntensityColor(_potentiometerValue);
     final voltaje = _potentiometerValue * (5.0 / 255.0);
@@ -253,6 +385,7 @@ class _ControlScreenState extends State<ControlScreen> {
           icon: Icons.bolt,
           color: Colors.amber,
         ),
+        if (_showLogs) _buildLogPanel(),
       ],
     );
   }
@@ -298,14 +431,10 @@ class _ControlScreenState extends State<ControlScreen> {
                   max: 255,
                   onChanged: (v) {
                     setState(() => _appSliderValue = v);
-                    // TIMER (Debounce) para evitar saturación y lag
-                    if (_bluetoothTimer?.isActive ?? false)
-                      _bluetoothTimer!.cancel();
+                    _bluetoothTimer?.cancel();
                     _bluetoothTimer = Timer(
-                      const Duration(milliseconds: 80),
-                      () {
-                        _sendMessage("V${v.toInt()}");
-                      },
+                      const Duration(milliseconds: 150),
+                      () => _sendMessage("V${v.toInt()}"),
                     );
                   },
                 ),
@@ -320,6 +449,7 @@ class _ControlScreenState extends State<ControlScreen> {
           icon: Icons.bolt,
           color: Colors.amber,
         ),
+        if (_showLogs) _buildLogPanel(),
       ],
     );
   }
@@ -353,6 +483,12 @@ class _ControlScreenState extends State<ControlScreen> {
           ],
         ),
         actions: [
+          // ── Botón toggle logs ──
+          IconButton(
+            icon: Icon(Icons.terminal, color: _showLogs ? _accent : _textDim),
+            tooltip: "Ver logs",
+            onPressed: () => setState(() => _showLogs = !_showLogs),
+          ),
           IconButton(
             icon: const Icon(Icons.power_settings_new, color: Colors.redAccent),
             onPressed: _disconnectAndReturn,

@@ -1,9 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_bluetooth_serial/flutter_bluetooth_serial.dart';
+import 'package:permission_handler/permission_handler.dart';
 import 'package:app_parcial/screens/control_screen.dart';
 import 'package:app_parcial/services/bluetooth_service.dart';
 
-// Definición de la paleta de colores para mantener consistencia
 const _bgDark = Color(0xFF0D1117);
 const _bgCard = Color(0xFF161B22);
 const _accent = Color(0xFF00E5FF);
@@ -22,47 +22,80 @@ class _ConexionBluetoothState extends State<ConexionBluetooth> {
   bool conectado = false;
   bool conectando = false;
 
-  /// Lógica principal de conexión al HC-05
   Future<void> conectar() async {
     if (conectando) return;
-
     setState(() => conectando = true);
 
     try {
-      // 1. Obtener lista de dispositivos vinculados
+      // 1. Pedir permisos uno por uno (Android 12+)
+      if (await Permission.bluetoothScan.isDenied) {
+        await Permission.bluetoothScan.request();
+      }
+      if (await Permission.bluetoothConnect.isDenied) {
+        await Permission.bluetoothConnect.request();
+      }
+      if (await Permission.location.isDenied) {
+        await Permission.location.request();
+      }
+
+      // 2. Verificar que estén concedidos
+      final btScan = await Permission.bluetoothScan.isGranted;
+      final btConnect = await Permission.bluetoothConnect.isGranted;
+
+      if (!btScan || !btConnect) {
+        final anyPermanent =
+            await Permission.bluetoothScan.isPermanentlyDenied ||
+            await Permission.bluetoothConnect.isPermanentlyDenied;
+        if (anyPermanent) await openAppSettings();
+        throw Exception(
+          "Activa 'Dispositivos Cercanos' en Ajustes → Apps → Permisos",
+        );
+      }
+
+      // 3. Verificar Bluetooth encendido
+      final btState = await FlutterBluetoothSerial.instance.state;
+      if (btState != BluetoothState.STATE_ON) {
+        await FlutterBluetoothSerial.instance.requestEnable();
+        throw Exception("Activa el Bluetooth e intenta de nuevo");
+      }
+
+      // 4. Obtener dispositivos vinculados
       final List<BluetoothDevice> devices = await _bluetoothService
           .getPairedDevices();
 
-      // 2. Buscar el dispositivo que contenga "HC" en su nombre
+      if (devices.isEmpty) {
+        throw Exception(
+          "No hay dispositivos vinculados. Vincula el HC-05 primero en Ajustes",
+        );
+      }
+
+      // 5. Buscar HC-05
       final BluetoothDevice hc = devices.firstWhere(
         (d) => d.name != null && d.name!.toUpperCase().contains("HC"),
-        orElse: () => throw Exception("HC-05 no encontrado en vinculados"),
+        orElse: () => throw Exception(
+          "HC-05 no encontrado. Asegúrate de que esté vinculado",
+        ),
       );
 
-      // 3. Intentar conexión mediante el servicio
+      // 6. Conectar
       await _bluetoothService.connect(hc);
 
       if (!mounted) return;
-
       setState(() {
         conectado = true;
         conectando = false;
       });
 
-      // 4. Navegar a la pantalla de control si la conexión fue exitosa
       Navigator.pushReplacement(
         context,
         MaterialPageRoute(builder: (_) => const ControlScreen()),
       );
     } catch (e) {
       if (!mounted) return;
-
       setState(() {
         conectado = false;
         conectando = false;
       });
-
-      // Mostrar error visual en caso de fallo
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text("Error: ${e.toString()}"),
@@ -124,7 +157,6 @@ class _ConexionBluetoothState extends State<ConexionBluetooth> {
     );
   }
 
-  /// Icono central con indicadores visuales de estado
   Widget _buildStatusIcon() {
     return Stack(
       alignment: Alignment.center,
@@ -167,7 +199,6 @@ class _ConexionBluetoothState extends State<ConexionBluetooth> {
     );
   }
 
-  /// Botón principal de acción
   Widget _buildConnectButton() {
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 40),
@@ -195,9 +226,9 @@ class _ConexionBluetoothState extends State<ConexionBluetooth> {
                     strokeWidth: 3,
                   ),
                 )
-              : Row(
+              : const Row(
                   mainAxisAlignment: MainAxisAlignment.center,
-                  children: const [
+                  children: [
                     Icon(Icons.flash_on, size: 18),
                     SizedBox(width: 10),
                     Text(

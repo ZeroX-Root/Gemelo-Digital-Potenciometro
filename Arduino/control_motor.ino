@@ -3,17 +3,17 @@
 // =========================
 // Pines HC-05
 // =========================
-const int BT_RX = 10;
-const int BT_TX = 11;
+const int BT_RX = 2;
+const int BT_TX = 3;
 SoftwareSerial bluetooth(BT_RX, BT_TX);
 
 // =========================
 // Pines puente H (Canal A)
 // ENA, IN1, IN2 → OUT1, OUT2
 // =========================
-const int ENA = 9;   // PWM
-const int IN1 = 7;   // Dirección
-const int IN2 = 8;   // Dirección
+const int ENA = 10;   // PWM
+const int IN1 = 8;   // Dirección
+const int IN2 = 9;   // Dirección
 
 // =========================
 // Potenciómetro
